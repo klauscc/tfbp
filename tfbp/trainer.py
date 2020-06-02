@@ -39,6 +39,8 @@ class BasicTrainer(keras.callbacks.Callback):
         self.params = params
         self.initiate()
 
+        self.logger = params.logger
+
     def initiate(self):
         """initiate the trainer"""
         #initiate metrics
@@ -64,6 +66,153 @@ class BasicTrainer(keras.callbacks.Callback):
         #define ckpt
         self.define_ckpt()
 
+    def train_batch(self, inputs, batch):
+        pass
+
+    def val_batch(self, inputs, batch):
+        pass
+
+    def train(self,
+              train_dataset,
+              val_dataset,
+              epochs=200,
+              validation_steps=None,
+              validation_freq=1):
+        """model train on `train_dataset`.
+
+        Args:
+            train_dataset: `tf.data` dataset. The dataset used in train. Iterator of the dataset should
+                             return a tuple (inp, tar). `inp` and `tar` can be a nested structure.
+            val_dataset: `tf.data` dataset or None. The same as `train_dataset` except used during 
+                            validation. If None, no validation will be performed. 
+
+        Kwargs:
+            epochs: Integer. The maximum train epochs.Default is 200.
+            validation_steps: Integer or `None`. The validation steps. If None, the validation will 
+                                iterate until val_dataset ends.
+            validation_freq: Integer or `None`. It's the frequency in epoch to do validation. Default is 
+                                1, that is validation after each epoch.
+
+        """
+        begin_time = time.time()
+        fmt = "Epoch {}, step {}, cost {:.4f}s. metrics: {}"
+
+        trainer_callbacks = self.callbacks
+
+        # before train begin
+        self._reset_metric_state()
+        self._call_callbacks("on_train_begin")
+
+        # train begin
+        for epoch in range(epochs):
+
+            with self.train_summary_writer.as_default():
+
+                #before epoch begin
+                self._call_callbacks("on_epoch_begin", epoch, self.logs)
+                self.logger.info("Epoch {}. Learning rate: {}".format(epoch,
+                                                                      self._print_model_lr()))
+
+                epoch_t1 = time.time()
+
+                # epoch begin
+                for step, (inp, tar) in enumerate(datasets):
+
+                    t1 = time.time()
+                    batch_size = get_bs_from_inp(inp)
+
+                    # before train_batch
+                    logs = self.logs.copy()
+                    logs.update({"size": batch_size, "batch": step})
+                    self._call_callbacks("on_train_batch_begin", step, logs)
+
+                    # train batch
+                    train_ret = self.train_batch(inputs, cur_step)
+                    self._update_logs()
+
+                    # after train_batch
+                    logs = self.logs.copy()
+                    logs.update({"size": batch_size, "batch": step, "result": train_ret})
+                    self._call_callbacks("on_train_batch_end", step, logs)
+
+                    t2 = time.time()
+                    self.logger.info(
+                        fmt.format(epoch, step, t2 - t1, self.print_metrics(self._train_metrics)))
+
+            if not val_dataset or (epoch + 1) % validation_freq != 0:
+                continue    #skip validation
+
+            with self.val_summary_writer.as_default():
+
+                # validation begin
+                self.logger.info("begin evaluation. epoch {}".format(epoch))
+                self._call_callbacks("on_test_begin", self.logs)
+
+                for step, (inp, tar) in enumerate(val_dataset):
+                    if validation_steps and step == validation_steps:
+                        break
+                    t1 = time.time()
+
+                    batch_size = get_bs_from_inp(inp)
+
+                    # on val_batch begin
+                    logs = self.logs.copy()
+                    logs.update({"size": batch_size, "batch": step})
+                    self._call_callbacks("on_test_batch_begin", step, logs)
+
+                    val_ret = self.val_batch(inputs, step)
+                    self._update_logs()
+
+                    # on val_batch end
+                    logs = self.logs.copy()
+                    logs.update({"size": batch_size, "batch": step, "result": val_ret})
+                    self._call_callbacks("on_test_batch_end", step, logs)
+
+                    t2 = time.time()
+                    self.logger.info(
+                        fmt.format(epoch, step, t2 - t1, self.print_metrics(self._val_metrics)))
+
+                self._call_callbacks("on_test_end", self.logs)
+
+            self._call_callbacks("on_epoch_end", self.logs)
+
+            self._reset_metric_state()
+
+            epoch_t2 = time.time()
+            self.logger.info("Epoch {}. Total Time: {:.4f}s".format(epoch, epoch_t2 - epoch_t1))
+        end_time = time.time()
+        self.logger.info("Training cost total:{:.2f}s".format(end_time - begin_time))
+        pass
+
+    def evaluate(self, dataset, steps=None):
+        """TODO: Docstring for evaluate.
+
+        Args:
+            dataset (TODO): TODO
+
+        Kwargs:
+            steps (TODO): TODO
+
+        Returns: TODO
+
+        """
+        pass
+
+    def predict(self, x, batch_size=None, steps=None):
+        """TODO: Docstring for predict.
+
+        Args:
+            x (TODO): TODO
+
+        Kwargs:
+            batch_size (TODO): TODO
+            steps (TODO): TODO
+
+        Returns: TODO
+
+        """
+        pass
+
     def register_models(self):
         self.models = []
         for attr in dir(self):
@@ -88,7 +237,8 @@ class BasicTrainer(keras.callbacks.Callback):
         self.ckpt = tf.train.Checkpoint(**ckpt_dict)
 
         #ckpt callback
-        ckpt_path = os.path.join(self.params.workspace, "ckpts")
+        ckpt_path = os.path.join(self.params.workspace, "ckpt")
+        os.makedirs(ckpt_path, exist_ok=True)
         ckpt_callbacks = CheckpointCallback(ckpt_path,
                                             ckpt=self.ckpt,
                                             save_freq=params.get("save_freq", 1),
@@ -174,12 +324,6 @@ class BasicTrainer(keras.callbacks.Callback):
         for k, v in self._metrics.items():
             self.logs[k] = v.result()
 
-    def train_batch(self, inp, tar, batch):
-        pass
-
-    def val_batch(self, inp, tar, batch):
-        pass
-
     def _print_model_lr(self):
         res = ""
         for model in models:
@@ -205,141 +349,6 @@ class BasicTrainer(keras.callbacks.Callback):
         [getattr(callback, phase)(*args) for callback in model.callbacks for model in self.models
         ]    # each model's callbacks
 
-    def fit(self, train_dataset, val_dataset, epochs=200, validation_steps=None, validation_freq=1):
-        """model fit on `train_dataset`.
-
-        Args:
-            train_dataset: `tf.data` dataset. The dataset used in train. Iterator of the dataset should
-                             return a tuple (inp, tar). `inp` and `tar` can be a nested structure.
-            val_dataset: `tf.data` dataset or None. The same as `train_dataset` except used during 
-                            validation. If None, no validation will be performed. 
-
-        Kwargs:
-            epochs: Integer. The maximum fit epochs.Default is 200.
-            validation_steps: Integer or `None`. The validation steps. If None, the validation will 
-                                iterate until val_dataset ends.
-            validation_freq: Integer or `None`. It's the frequency in epoch to do validation. Default is 
-                                1, that is validation after each epoch.
-
-        """
-        begin_time = time.time()
-        fmt = "Epoch {}, step {}, cost {:.4f}s. metrics: {}"
-
-        trainer_callbacks = self.callbacks
-
-        # before train begin
-        self._reset_metric_state()
-        self._call_callbacks("on_train_begin")
-
-        # train begin
-        for epoch in range(epochs):
-
-            with self.train_summary_writer.as_default():
-
-                #before epoch begin
-                self._call_callbacks("on_epoch_begin", epoch, self.logs)
-                self.print("Epoch {}. Learning rate: {}".format(epoch, self._print_model_lr()))
-
-                epoch_t1 = time.time()
-
-                # epoch begin
-                for step, (inp, tar) in enumerate(datasets):
-
-                    t1 = time.time()
-                    batch_size = get_bs_from_inp(inp)
-
-                    # before train_batch
-                    logs = self.logs.copy()
-                    logs.update({"size": batch_size, "batch": step})
-                    self._call_callbacks("on_train_batch_begin", step, logs)
-
-                    # train batch
-                    train_ret = self.train_batch(inp, tar, cur_step)
-                    self._update_logs()
-
-                    # after train_batch
-                    logs = self.logs.copy()
-                    logs.update({"size": batch_size, "batch": step, "result": train_ret})
-                    self._call_callbacks("on_train_batch_end", step, logs)
-
-                    t2 = time.time()
-                    self.print(
-                        fmt.format(epoch, step, t2 - t1, self.print_metrics(self._train_metrics)))
-
-            if not val_dataset or (epoch + 1) % validation_freq != 0:
-                continue    #skip validation
-
-            with self.val_summary_writer.as_default():
-
-                # validation begin
-                self.print("begin evaluation. epoch {}".format(epoch))
-                self._call_callbacks("on_test_begin", self.logs)
-
-                for step, (inp, tar) in enumerate(val_dataset):
-                    if validation_steps and step == validation_steps:
-                        break
-                    t1 = time.time()
-
-                    batch_size = get_bs_from_inp(inp)
-
-                    # on val_batch begin
-                    logs = self.logs.copy()
-                    logs.update({"size": batch_size, "batch": step})
-                    self._call_callbacks("on_test_batch_begin", step, logs)
-
-                    val_ret = self.val_batch(inp, tar, step)
-                    self._update_logs()
-
-                    # on val_batch end
-                    logs = self.logs.copy()
-                    logs.update({"size": batch_size, "batch": step, "result": val_ret})
-                    self._call_callbacks("on_test_batch_end", step, logs)
-
-                    t2 = time.time()
-                    self.print(
-                        fmt.format(epoch, step, t2 - t1, self.print_metrics(self._val_metrics)))
-
-                self._call_callbacks("on_test_end", self.logs)
-
-            self._call_callbacks("on_epoch_end", self.logs)
-
-            self._reset_metric_state()
-
-            epoch_t2 = time.time()
-            self.print("Epoch {}. Total Time: {:.4f}s".format(epoch, epoch_t2 - epoch_t1))
-        end_time = time.time()
-        self.print("Training cost total:{:.2f}s".format(end_time - begin_time))
-        pass
-
     def _reset_metric_state(self):
         for k, metric in self._metrics.items():
             metric.reset_states()
-
-    def evaluate(self, dataset, steps=None):
-        """TODO: Docstring for evaluate.
-
-        Args:
-            dataset (TODO): TODO
-
-        Kwargs:
-            steps (TODO): TODO
-
-        Returns: TODO
-
-        """
-        pass
-
-    def predict(self, x, batch_size=None, steps=None):
-        """TODO: Docstring for predict.
-
-        Args:
-            x (TODO): TODO
-
-        Kwargs:
-            batch_size (TODO): TODO
-            steps (TODO): TODO
-
-        Returns: TODO
-
-        """
-        pass

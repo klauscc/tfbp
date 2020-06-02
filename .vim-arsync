@@ -1,0 +1,7 @@
+remote_host    dub 
+remote_user    fengchan
+remote_path   /home/fengchan/stor/projects/004-tfbp 
+local_path    .
+ignore_path     ["build/"]
+ignore_dotfiles 0
+auto_sync_up    0
