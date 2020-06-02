@@ -66,6 +66,9 @@ class BasicTrainer(keras.callbacks.Callback):
         #define ckpt
         self.define_ckpt()
 
+        # print interval
+        self.log_steps = self.params.get("log_steps", 100)
+
     def train_batch(self, inputs, batch):
         pass
 
@@ -136,8 +139,14 @@ class BasicTrainer(keras.callbacks.Callback):
                     self._call_callbacks("on_train_batch_end", step, logs)
 
                     t2 = time.time()
-                    self.logger.info(
-                        fmt.format(epoch, step, t2 - t1, self.print_metrics(self._train_metrics)))
+                    if step % self.log_steps == 0:
+                        self.logger.info(
+                            fmt.format(epoch, step, t2 - t1,
+                                       self.print_metrics(self._train_metrics)))
+                # log at the end of the epoch.
+                self.logger.info("Epoch {} finished.\n".format(epoch) +
+                                 fmt.format(epoch, step, t2 -
+                                            t1, self.print_metrics(self._train_metrics)))
 
             if not val_dataset or (epoch + 1) % validation_freq != 0:
                 continue    #skip validation
@@ -145,7 +154,7 @@ class BasicTrainer(keras.callbacks.Callback):
             with self.val_summary_writer.as_default():
 
                 # validation begin
-                self.logger.info("begin evaluation. epoch {}".format(epoch))
+                self.logger.info("Begin evaluation. epoch {}".format(epoch))
                 self._call_callbacks("on_test_begin", self.logs)
 
                 for step, (inp, tar) in enumerate(val_dataset):
