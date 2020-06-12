@@ -79,9 +79,9 @@ def _default_arg_parser():
                         help="Path to save the ckpts and results.",
                         default="",
                         type=str)
-    parser.add_argument("--new_workspace_if_exist",
-                        help="Whether to create a new workspace if the specified exist.",
-                        default=False)
+    parser.add_argument("--resume",
+                        help="Whether to resume the workspace if the specified workspace exist. Default 1.",
+                        default=1)
     parser.add_argument(
         "--gpu_id",
         help="GPU Id to run the model. If not specified, an empty card will be seletected",
@@ -156,7 +156,7 @@ def update_workspace(params):
     """
     if os.path.isdir(
             params.workspace
-    ) and params.new_workspace_if_exist:    # if workspace already exist and new_workspace_if_exist
+    ) and params.resume == 0:    # if workspace already exist and new_workspace_if_exist
         dirname, basename = os.path.split(params.workspace)
         i = 1
         new_path = os.path.join(dirname, basename + "-{}".format(i))

@@ -9,7 +9,9 @@
 #
 #================================================================
 
+import os
 import time
+from easydict import EasyDict
 import tensorflow as tf
 keras = tf.keras
 K = keras.backend
@@ -37,9 +39,9 @@ class BasicTrainer(keras.callbacks.Callback):
         """
         super(BasicTrainer, self).__init__()
         self.params = params
-        self.initiate()
-
         self.logger = params.logger
+
+        self.initiate()
 
     def initiate(self):
         """initiate the trainer"""
@@ -58,41 +60,44 @@ class BasicTrainer(keras.callbacks.Callback):
         self.logs = EasyDict()
         self._update_logs()
 
-        # register models
-        self.register_models()
-        # log step
-        self.cur_step = tf.Variable(0, dtype=tf.int64)
-        tf.summary.experimental.set_step(self.cur_step)
-        #define ckpt
-        self.define_ckpt()
-
         # print interval
         self.log_steps = self.params.get("log_steps", 100)
 
-    def train_batch(self, inputs, batch):
+        # create tf summary
+        self.create_summary_writer()
+
+    def train_step(self, inputs):
         pass
 
-    def val_batch(self, inputs, batch):
+    def test_step(self, inputs):
         pass
+
+    def resume_training(self):
+        latest_ckpt_file = tf.train.latest_checkpoint(os.path.join(self.params.workspace, "ckpts"))
+        if latest_ckpt_file is not None:
+            self.ckpt.restore(latest_ckpt_file)
+            self.epoch.assign_add(1)
+        self.logger.info("Resume training from :{}.".format(latest_ckpt_file))
+        self.logger.info("Start training from epoch:{}".format(self.epoch.numpy()))
 
     def train(self,
-              train_dataset,
-              val_dataset,
+              train_dataloader,
+              val_dataloader,
               epochs=200,
               validation_steps=None,
               validation_freq=1):
-        """model train on `train_dataset`.
+        """model train on `train_dataloader`.
 
         Args:
-            train_dataset: `tf.data` dataset. The dataset used in train. Iterator of the dataset should
+            train_dataloader: `tf.data` dataset. The dataset used in train. Iterator of the dataset should
                              return a tuple (inp, tar). `inp` and `tar` can be a nested structure.
-            val_dataset: `tf.data` dataset or None. The same as `train_dataset` except used during 
+            val_dataloader: `tf.data` dataset or None. The same as `train_dataloader` except used during 
                             validation. If None, no validation will be performed. 
 
         Kwargs:
             epochs: Integer. The maximum train epochs.Default is 200.
             validation_steps: Integer or `None`. The validation steps. If None, the validation will 
-                                iterate until val_dataset ends.
+                                iterate until val_dataloader ends.
             validation_freq: Integer or `None`. It's the frequency in epoch to do validation. Default is 
                                 1, that is validation after each epoch.
 
@@ -102,12 +107,15 @@ class BasicTrainer(keras.callbacks.Callback):
 
         trainer_callbacks = self.callbacks
 
+        if self.params.resume == 1:
+            self.resume_training()
+
         # before train begin
         self._reset_metric_state()
         self._call_callbacks("on_train_begin")
 
         # train begin
-        for epoch in range(epochs):
+        for epoch in range(self.epoch.numpy(), epochs):
 
             with self.train_summary_writer.as_default():
 
@@ -119,10 +127,10 @@ class BasicTrainer(keras.callbacks.Callback):
                 epoch_t1 = time.time()
 
                 # epoch begin
-                for step, (inp, tar) in enumerate(datasets):
+                for step, inputs in enumerate(train_dataloader):
 
                     t1 = time.time()
-                    batch_size = get_bs_from_inp(inp)
+                    batch_size = get_bs_from_inp(inputs)
 
                     # before train_batch
                     logs = self.logs.copy()
@@ -130,7 +138,7 @@ class BasicTrainer(keras.callbacks.Callback):
                     self._call_callbacks("on_train_batch_begin", step, logs)
 
                     # train batch
-                    train_ret = self.train_batch(inputs, cur_step)
+                    train_ret = self.train_step(inputs)
                     self._update_logs()
 
                     # after train_batch
@@ -141,14 +149,18 @@ class BasicTrainer(keras.callbacks.Callback):
                     t2 = time.time()
                     if step % self.log_steps == 0:
                         self.logger.info(
-                            fmt.format(epoch, step, t2 - t1,
-                                       self.print_metrics(self._train_metrics)))
+                            fmt.format(epoch, step, t2 - t1, self._print_dict(self._train_metrics)))
+
+                    self.cur_step.assign_add(1)
+
                 # log at the end of the epoch.
                 self.logger.info("Epoch {} finished.\n".format(epoch) +
                                  fmt.format(epoch, step, t2 -
-                                            t1, self.print_metrics(self._train_metrics)))
+                                            t1, self._print_dict(self._train_metrics)))
 
-            if not val_dataset or (epoch + 1) % validation_freq != 0:
+                self.epoch.assign_add(1)
+
+            if not val_dataloader or (epoch + 1) % validation_freq != 0:
                 continue    #skip validation
 
             with self.val_summary_writer.as_default():
@@ -157,19 +169,19 @@ class BasicTrainer(keras.callbacks.Callback):
                 self.logger.info("Begin evaluation. epoch {}".format(epoch))
                 self._call_callbacks("on_test_begin", self.logs)
 
-                for step, (inp, tar) in enumerate(val_dataset):
+                for step, inputs in enumerate(val_dataloader):
                     if validation_steps and step == validation_steps:
                         break
                     t1 = time.time()
 
-                    batch_size = get_bs_from_inp(inp)
+                    batch_size = get_bs_from_inp(inputs)
 
                     # on val_batch begin
                     logs = self.logs.copy()
                     logs.update({"size": batch_size, "batch": step})
                     self._call_callbacks("on_test_batch_begin", step, logs)
 
-                    val_ret = self.val_batch(inputs, step)
+                    val_ret = self.test_step(inputs)
                     self._update_logs()
 
                     # on val_batch end
@@ -179,11 +191,11 @@ class BasicTrainer(keras.callbacks.Callback):
 
                     t2 = time.time()
                     self.logger.info(
-                        fmt.format(epoch, step, t2 - t1, self.print_metrics(self._val_metrics)))
+                        fmt.format(epoch, step, t2 - t1, self._print_dict(self._val_metrics)))
 
                 self._call_callbacks("on_test_end", self.logs)
 
-            self._call_callbacks("on_epoch_end", self.logs)
+            self._call_callbacks("on_epoch_end", epoch, self.logs)
 
             self._reset_metric_state()
 
@@ -191,7 +203,6 @@ class BasicTrainer(keras.callbacks.Callback):
             self.logger.info("Epoch {}. Total Time: {:.4f}s".format(epoch, epoch_t2 - epoch_t1))
         end_time = time.time()
         self.logger.info("Training cost total:{:.2f}s".format(end_time - begin_time))
-        pass
 
     def evaluate(self, dataset, steps=None):
         """TODO: Docstring for evaluate.
@@ -222,14 +233,20 @@ class BasicTrainer(keras.callbacks.Callback):
         """
         pass
 
-    def register_models(self):
-        self.models = []
-        for attr in dir(self):
-            if isinstance(attr, (keras.Model, keras.Sequential)):
-                self.models.append(attr)
+    def register_models(self, models):
+        self.models = models
+        self.logger.info(self.models)
+
+        # log step
+        self.cur_step = tf.Variable(0, dtype=tf.int64)
+        tf.summary.experimental.set_step(self.cur_step)
+        self.epoch = tf.Variable(0, dtype=tf.int64)
+        #define ckpt
+        self.define_ckpt()
 
     def define_ckpt(self):
-        ckpt_dict = {"epoch": tf.Variable(0), 'cur_step': self.cur_step}
+        params = self.params
+        ckpt_dict = {"epoch": self.epoch, 'cur_step': self.cur_step}
 
         for i, model in enumerate(self.models):
 
@@ -246,7 +263,7 @@ class BasicTrainer(keras.callbacks.Callback):
         self.ckpt = tf.train.Checkpoint(**ckpt_dict)
 
         #ckpt callback
-        ckpt_path = os.path.join(self.params.workspace, "ckpt")
+        ckpt_path = os.path.join(params.workspace, "ckpts")
         os.makedirs(ckpt_path, exist_ok=True)
         ckpt_callbacks = CheckpointCallback(ckpt_path,
                                             ckpt=self.ckpt,
@@ -335,13 +352,12 @@ class BasicTrainer(keras.callbacks.Callback):
 
     def _print_model_lr(self):
         res = ""
-        for model in models:
-            model_lr = model.optimizer.decayed_lr(tf.float32)
+        for model in self.models:
+            model_lr = model.optimizer._decayed_lr(tf.float32)
             tf.summary.scalar(model.name + "/learning_rate",
                               model_lr,
                               step=tf.summary.experimental.get_step())
-            res += "{}:{:.7f}".format(model.name,
-                                      K.get_value(model.optimizer.decayed_lr(tf.float32)))
+            res += "{}:{:.7f}".format(model.name, K.get_value(model_lr))
         return res
 
     def _print_dict(self, dic):
@@ -353,10 +369,13 @@ class BasicTrainer(keras.callbacks.Callback):
     def _call_callbacks(self, phase, *args):
         getattr(self, phase)(*args)    # The trainer itself is a callback.
 
-        [getattr(callback, phase)(*args) for callback in trainer_callbacks]    # trainer callbacks
+        [getattr(callback, phase)(*args) for callback in self.callbacks]    # trainer callbacks
 
-        [getattr(callback, phase)(*args) for callback in model.callbacks for model in self.models
-        ]    # each model's callbacks
+        for model in self.models:
+            if model.callbacks is not None:
+                for callback in model.callbacks:
+                    getattr(callback, phase)(*args)
+        # each model's callbacks
 
     def _reset_metric_state(self):
         for k, metric in self._metrics.items():
