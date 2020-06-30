@@ -20,6 +20,33 @@ from .callbacks.ckpt_callbacks import CheckpointCallback
 from .utils import get_bs_from_inp
 
 
+class MeanMetricWrapper(object):
+    """docstring for MetricWrapper"""
+
+    def __init__(self, metric: keras.metrics.Metric):
+        super(MeanMetricWrapper, self).__init__()
+        self.metric = metric
+        self.last_state = 0.0
+
+    def __call__(self, value):
+        self.last_state = value
+        self.metric(value)
+
+    def update_state(self, value):
+        self.last_state = value
+        self.metric.update_state(value)
+
+    def reset_states(self):
+        self.last_state = 0
+        self.metric.reset_states()
+
+    def result(self, show_last_state=False):
+        if show_last_state:
+            return "{:.3e}[{:.3e}]".format(self.last_state, self.metric.result())
+        else:
+            return self.metric.result()
+
+
 class BasicTrainer(keras.callbacks.Callback):
     """basic trainer. 
 
@@ -51,8 +78,8 @@ class BasicTrainer(keras.callbacks.Callback):
         self._val_metrics = EasyDict()
 
         # create loss for both train and val
-        self.train_loss = tf.keras.metrics.Mean(name="train_loss")
-        self.val_loss = tf.keras.metrics.Mean(name="val_loss")
+        self.train_loss = MeanMetricWrapper(tf.keras.metrics.Mean(name="train_loss"))
+        self.val_loss = MeanMetricWrapper(tf.keras.metrics.Mean(name="val_loss"))
         self.metric("loss", train_metric=self.train_loss, val_metric=self.val_loss)
 
         #initiate logs for callbacks
@@ -149,14 +176,15 @@ class BasicTrainer(keras.callbacks.Callback):
                     t2 = time.time()
                     if step % self.log_steps == 0:
                         self.logger.info(
-                            fmt.format(epoch, step, t2 - t1, self._print_dict(self._train_metrics)))
+                            fmt.format(epoch, step, t2 - t1,
+                                       self.print_metrics(self._train_metrics)))
 
                     self.cur_step.assign_add(1)
 
                 # log at the end of the epoch.
                 self.logger.info("Epoch {} finished.\n".format(epoch) +
                                  fmt.format(epoch, step, t2 -
-                                            t1, self._print_dict(self._train_metrics)))
+                                            t1, self.print_metrics(self._train_metrics)))
 
                 self.epoch.assign_add(1)
 
@@ -190,8 +218,9 @@ class BasicTrainer(keras.callbacks.Callback):
                     self._call_callbacks("on_test_batch_end", step, logs)
 
                     t2 = time.time()
-                    self.logger.info(
-                        fmt.format(epoch, step, t2 - t1, self._print_dict(self._val_metrics)))
+                    if step % self.params.get('val_log_steps', 1) == 0:
+                        self.logger.info(
+                            fmt.format(epoch, step, t2 - t1, self.print_metrics(self._val_metrics)))
 
                 self._call_callbacks("on_test_end", self.logs)
 
@@ -322,6 +351,11 @@ class BasicTrainer(keras.callbacks.Callback):
         train_key = "train_" + key
         val_key = "val_" + key
 
+        if isinstance(train_metric, keras.metrics.Mean):
+            train_metric = MeanMetricWrapper(train_metric)
+        if isinstance(val_metric, keras.metrics.Mean):
+            val_metric = MeanMetricWrapper(val_metric)
+
         if mode == "both":
             assert train_metric is not None and val_metric is not None, \
                     "Both train_metric and val_metric should not be None when mode is {}".format(mode)
@@ -360,10 +394,10 @@ class BasicTrainer(keras.callbacks.Callback):
             res += "{}:{:.7f}".format(model.name, K.get_value(model_lr))
         return res
 
-    def _print_dict(self, dic):
+    def print_metrics(self, dic):
         res = ""
         for k, v in dic.items():
-            res += "{}:{:.7f},".format(k, v.result())
+            res += "{}:{},".format(k, v.result(show_last_state=True))
         return res
 
     def _call_callbacks(self, phase, *args):
