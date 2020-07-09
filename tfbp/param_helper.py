@@ -77,11 +77,12 @@ def _default_arg_parser():
     parser.add_argument("--config_file", help="Model config file path.", default="", type=str)
     parser.add_argument("--workspace",
                         help="Path to save the ckpts and results.",
-                        default="",
+                        default="/tmp/tfbp_default_workspace",
                         type=str)
-    parser.add_argument("--resume",
-                        help="Whether to resume the workspace if the specified workspace exist. Default 1.",
-                        default=1)
+    parser.add_argument(
+        "--resume",
+        help="Whether to resume the workspace if the specified workspace exist. Default 1.",
+        default=1)
     parser.add_argument(
         "--gpu_id",
         help="GPU Id to run the model. If not specified, an empty card will be seletected",
