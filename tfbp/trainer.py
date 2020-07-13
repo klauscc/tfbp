@@ -27,20 +27,21 @@ class MeanMetricWrapper(object):
         super(MeanMetricWrapper, self).__init__()
         self.metric = metric
         self.last_state = 0.0
+        print(metric.name)
 
-    def __call__(self, value):
+    def __call__(self, *value):
         self.last_state = value
-        self.metric(value)
+        self.metric(*value)
 
-    def update_state(self, value):
+    def update_state(self, *value):
         self.last_state = value
-        self.metric.update_state(value)
+        self.metric.update_state(*value)
 
     def reset_states(self):
         self.last_state = 0
         self.metric.reset_states()
 
-    def result(self, show_last_state=False):
+    def result(self, show_last_state=True):
         if show_last_state:
             return "{:.3e}[{:.3e}]".format(self.last_state, self.metric.result())
         else:
@@ -78,8 +79,10 @@ class BasicTrainer(keras.callbacks.Callback):
         self._val_metrics = EasyDict()
 
         # create loss for both train and val
-        self.train_loss = MeanMetricWrapper(tf.keras.metrics.Mean(name="train_loss"))
-        self.val_loss = MeanMetricWrapper(tf.keras.metrics.Mean(name="val_loss"))
+        # self.train_loss = MeanMetricWrapper(tf.keras.metrics.Mean(name="train_loss"))
+        # self.val_loss = MeanMetricWrapper(tf.keras.metrics.Mean(name="val_loss"))
+        self.train_loss = tf.keras.metrics.Mean(name="train_loss")
+        self.val_loss = tf.keras.metrics.Mean(name="val_loss")
         self.metric("loss", train_metric=self.train_loss, val_metric=self.val_loss)
 
         #initiate logs for callbacks
@@ -351,10 +354,10 @@ class BasicTrainer(keras.callbacks.Callback):
         train_key = "train_" + key
         val_key = "val_" + key
 
-        if isinstance(train_metric, keras.metrics.Mean):
-            train_metric = MeanMetricWrapper(train_metric)
-        if isinstance(val_metric, keras.metrics.Mean):
-            val_metric = MeanMetricWrapper(val_metric)
+        # if isinstance(train_metric, keras.metrics.Mean):
+        # train_metric = MeanMetricWrapper(train_metric)
+        # if isinstance(val_metric, keras.metrics.Mean):
+        # val_metric = MeanMetricWrapper(val_metric)
 
         if mode == "both":
             assert train_metric is not None and val_metric is not None, \
@@ -397,7 +400,7 @@ class BasicTrainer(keras.callbacks.Callback):
     def print_metrics(self, dic):
         res = ""
         for k, v in dic.items():
-            res += "{}:{},".format(k, v.result(show_last_state=True))
+            res += "{}:{},".format(k, v.result())
         return res
 
     def _call_callbacks(self, phase, *args):
@@ -406,7 +409,7 @@ class BasicTrainer(keras.callbacks.Callback):
         [getattr(callback, phase)(*args) for callback in self.callbacks]    # trainer callbacks
 
         for model in self.models:
-            if model.callbacks is not None:
+            if hasattr(model, 'callbacks') and model.callbacks is not None:
                 for callback in model.callbacks:
                     getattr(callback, phase)(*args)
         # each model's callbacks

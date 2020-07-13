@@ -86,7 +86,6 @@ def _default_arg_parser():
     parser.add_argument(
         "--gpu_id",
         help="GPU Id to run the model. If not specified, an empty card will be seletected",
-        type=int,
         default=-2)
     return parser
 
@@ -133,10 +132,12 @@ def _update_arg_params(arg_parser, default_params=None):
         if isinstance(v, str) and "," in v:
             params[k] = [_literal_eval(s) for s in v.split(",")]
 
-    if params["gpu_id"] < 0:
+    if isinstance(params['gpu_id'], int) and params["gpu_id"] < 0:
         gpu_id = get_vacant_gpu()
         params["gpu_id"] = gpu_id
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(params["gpu_id"])
+    if isinstance(params['gpu_id'], (list, tuple)):
+        gpu_id = ','.join([str(i) for i in params['gpu_id']])
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
 
     params = EasyDict(params)
 

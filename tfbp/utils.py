@@ -24,10 +24,12 @@ def get_bs_from_inp(inp):
     """
     if isinstance(inp, (dict,)):
         x = inp[inp.keys()[0]]
-    elif isinstance(inp, (list)):
+    elif isinstance(inp, (list, tuple)):
         x = inp[0]
     elif isinstance(inp, tf.Tensor):
         x = inp
+    else:
+        raise ValueError('x is of unsupported type:{}'.format(type(x)))
     return keras.backend.get_value(tf.shape(x)[0])
 
 
