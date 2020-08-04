@@ -77,7 +77,7 @@ def _default_arg_parser():
     parser.add_argument("--config_file", help="Model config file path.", default="", type=str)
     parser.add_argument("--workspace",
                         help="Path to save the ckpts and results.",
-                        default="/tmp/tfbp_default_workspace",
+                        default=f"/tmp/{os.environ.get('USER')}/tfbp_default_workspace",
                         type=str)
     parser.add_argument(
         "--resume",
